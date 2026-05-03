@@ -5,3 +5,4 @@ Cargo.lock
 *.orig
 .env
 custom_mapping.env
+*.uf2

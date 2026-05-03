@@ -15,13 +15,14 @@ use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use core::cell::RefCell;
 
-use display_interface::WriteOnlyDataCommand;
+use mipidsi::interface;
 
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::prelude::{DrawTarget, Point};
 
 use embedded_hal::digital::OutputPin;
+use embedded_hal_bus::spi::ExclusiveDevice;
 use ui::rom_select::select_rom;
 
 use embedded_sdmmc::sdcard::AcquireOpts;
@@ -30,6 +31,7 @@ use gb_core::hardware::cartridge::Cartridge;
 use mipidsi::models::Model;
 use mipidsi::options::{Orientation, Rotation};
 use mipidsi::Display;
+use mipidsi::interface::SpiInterface;
 use panic_probe as _;
 use ui::loading::LoadingScreen;
 extern crate alloc;
@@ -87,19 +89,19 @@ static SERIAL: static_cell::StaticCell<
     >,
 > = static_cell::StaticCell::new();
 
-#[const_env::from_env("DISPLAY_WIDTH")]
+#[const_env::env_item("DISPLAY_WIDTH")]
 const DISPLAY_WIDTH: u16 = 240;
-#[const_env::from_env("DISPLAY_HEIGHT")]
+#[const_env::env_item("DISPLAY_HEIGHT")]
 const DISPLAY_HEIGHT: u16 = 320;
-#[const_env::from_env]
+#[const_env::env_item]
 const GAMEBOY_RENDER_WIDTH: u16 = 320;
-#[const_env::from_env]
+#[const_env::env_item]
 const GAMEBOY_RENDER_HEIGHT: u16 = 240;
-#[const_env::from_env]
+#[const_env::env_item]
 const DISPLAY_ROTATION: u16 = 0;
-#[const_env::from_env]
+#[const_env::env_item]
 const DISPLAY_MIRRORED: bool = false;
-#[const_env::from_env]
+#[const_env::env_item]
 const DISPLAY_COLOR_INVERT: bool = false;
 
 const RENDER_WIDTH: u16 = if DISPLAY_ROTATION == 90 || DISPLAY_ROTATION == 270 {
@@ -289,19 +291,26 @@ fn main() -> ! {
     cortex_m::singleton!(: [u16;(GAMEBOY_RENDER_WIDTH as usize) * 3]  = [0u16; (GAMEBOY_RENDER_WIDTH as usize ) * 3 ])
         .unwrap()
         .as_mut_slice();
-    let mut screen_data_cs = pin_select!(pins, env!("PIN_SCREEN_CS")).into_push_pull_output();
-    screen_data_cs.set_low().unwrap();
+    let screen_data_cs = pin_select!(pins, env!("PIN_SCREEN_CS")).into_push_pull_output();
+    //screen_data_cs.set_low().unwrap();
 
     let screen_data_command_pin = pin_select!(pins, env!("PIN_SCREEN_DC")).into_push_pull_output();
-    let display_reset = pin_select!(pins, env!("PIN_SCREEN_RESET")).into_push_pull_output();
-    let spi_sclk =
-        pin_select!(pins, env!("PIN_SCREEN_SCLK")).into_function::<hal::gpio::FunctionPio0>();
-    let spi_mosi =
-        pin_select!(pins, env!("PIN_SCREEN_MOSI")).into_function::<hal::gpio::FunctionPio0>();
+    let mut display_reset = pin_select!(pins, env!("PIN_SCREEN_RESET")).into_push_pull_output();
+    display_reset.set_low().unwrap();
 
-    let streamer = hardware::display::DmaStreamer::new(dma.ch0, dma.ch1, display_buffer);
+    let spi_sclk =
+        pin_select!(pins, env!("PIN_SCREEN_SCLK")).into_function::<hal::gpio::FunctionSpi>();
+        //pin_select!(pins, env!("PIN_SCREEN_SCLK")).into_function::<hal::gpio::FunctionPio0>();
+    let spi_mosi =
+        pin_select!(pins, env!("PIN_SCREEN_MOSI")).into_function::<hal::gpio::FunctionSpi>();
+        //pin_select!(pins, env!("PIN_SCREEN_MOSI")).into_function::<hal::gpio::FunctionPio0>();
+    let screen_miso_pin =
+        pin_select!(pins, env!("PIN_SCREEN_MISO")).into_function::<hal::gpio::FunctionSpi>();
+
+    /*let streamer = hardware::display::DmaStreamer::new(dma.ch0, dma.ch1, display_buffer);
     let display_interface = hardware::display::SpiPioDmaInterface::new(
         (3, 0),
+        screen_data_cs,
         screen_data_command_pin,
         &mut pio_0,
         sm0_1,
@@ -310,12 +319,31 @@ fn main() -> ! {
         spi_mosi.id().num,
         streamer,
         timer,
+    );*/
+
+    let spi_bus = rp235x_hal::Spi::<_, _, _, 8>::new(
+        pac.SPI0,
+        (spi_mosi, screen_miso_pin, spi_sclk)
     );
 
+    // Exchange the uninitialised SPI driver for an initialised one
+    let spi_bus = spi_bus.init(
+        &mut pac.RESETS,
+        clocks.peripheral_clock.freq(),
+        12_000_000u32.Hz(),
+        embedded_hal::spi::MODE_3,
+    );
+
+    let excl_spi_dev = ExclusiveDevice::new(spi_bus, screen_data_cs, timer).unwrap();
+    let mut buffer = [0_u8; 512];
+    let display_interface = SpiInterface::new(excl_spi_dev, screen_data_command_pin, &mut buffer);
+
     let display_builder = mipidsi::Builder::new(DisplayDriver, display_interface)
-        .reset_pin(display_reset)
         .display_size(DISPLAY_WIDTH as u16, DISPLAY_HEIGHT as u16)
-        .color_order(mipidsi::options::ColorOrder::Bgr)
+        //.display_size(240u16, 240u16)
+        .display_offset(0, 0)
+        .reset_pin(display_reset)
+        //.color_order(mipidsi::options::ColorOrder::Bgr)
         .invert_colors(if DISPLAY_COLOR_INVERT {
             mipidsi::options::ColorInversion::Inverted
         } else {
@@ -333,6 +361,9 @@ fn main() -> ! {
         });
 
     let mut display = display_builder.init(&mut timer).unwrap();
+
+    display.clear(Rgb565::WHITE).unwrap();
+    //display.clear(Rgb565::BLACK).unwrap();
 
     ////////////////////// JOYPAD
     let mut b_button = pin_select!(pins, env!("PIN_B_BUTTON"))
@@ -417,7 +448,7 @@ fn main() -> ! {
     );
     led_pin.set_high().unwrap();
 
-    display.clear(Rgb565::BLACK).unwrap();
+    //display.clear(Rgb565::BLACK).unwrap();
     run_game_boy(gameboy, display, button_handler, timer);
     loop {
         crate::hal::arch::nop();
@@ -431,8 +462,9 @@ pub fn run_game_boy<'a, D: TimerDevice, DI, M, RST, BH: GameboyButtonHandler<'a>
     mut button_handler: BH,
     timer: crate::hal::Timer<D>,
 ) where
-    DI: WriteOnlyDataCommand,
+    DI: interface::Interface,
     M: Model<ColorFormat = Rgb565>,
+    Rgb565: interface::InterfacePixelFormat<DI::Word>,
     RST: OutputPin,
 {
     const MIDDLE_HEIGHT: u16 = (RENDER_HEIGHT - GAMEBOY_RENDER_HEIGHT) / 2;
@@ -452,7 +484,9 @@ pub fn run_game_boy<'a, D: TimerDevice, DI, M, RST, BH: GameboyButtonHandler<'a>
                 MIDDLE_HEIGHT,
                 (GAMEBOY_RENDER_WIDTH - 1) as u16 + MIDDLE_WIDTH,
                 (GAMEBOY_RENDER_HEIGHT - 1) as u16 + MIDDLE_HEIGHT,
-                scaler.scale_iterator(GameEmulationHandler::new(&mut gameboy, &mut button_handler)),
+                scaler.scale_iterator(
+                    GameEmulationHandler::new(&mut gameboy, &mut button_handler)
+                ),
             )
             .unwrap();
 
