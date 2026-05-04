@@ -22,7 +22,6 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::prelude::{DrawTarget, Point};
 
 use embedded_hal::digital::OutputPin;
-use embedded_hal_bus::spi::ExclusiveDevice;
 use ui::rom_select::select_rom;
 
 use embedded_sdmmc::sdcard::AcquireOpts;
@@ -31,7 +30,6 @@ use gb_core::hardware::cartridge::Cartridge;
 use mipidsi::models::Model;
 use mipidsi::options::{Orientation, Rotation};
 use mipidsi::Display;
-use mipidsi::interface::SpiInterface;
 use panic_probe as _;
 use ui::loading::LoadingScreen;
 extern crate alloc;
@@ -296,18 +294,18 @@ fn main() -> ! {
 
     let screen_data_command_pin = pin_select!(pins, env!("PIN_SCREEN_DC")).into_push_pull_output();
     let mut display_reset = pin_select!(pins, env!("PIN_SCREEN_RESET")).into_push_pull_output();
-    display_reset.set_low().unwrap();
+    display_reset.set_high().unwrap();
 
     let spi_sclk =
-        pin_select!(pins, env!("PIN_SCREEN_SCLK")).into_function::<hal::gpio::FunctionSpi>();
-        //pin_select!(pins, env!("PIN_SCREEN_SCLK")).into_function::<hal::gpio::FunctionPio0>();
+        //pin_select!(pins, env!("PIN_SCREEN_SCLK")).into_function::<hal::gpio::FunctionSpi>();
+        pin_select!(pins, env!("PIN_SCREEN_SCLK")).into_function::<hal::gpio::FunctionPio0>();
     let spi_mosi =
-        pin_select!(pins, env!("PIN_SCREEN_MOSI")).into_function::<hal::gpio::FunctionSpi>();
-        //pin_select!(pins, env!("PIN_SCREEN_MOSI")).into_function::<hal::gpio::FunctionPio0>();
+        //pin_select!(pins, env!("PIN_SCREEN_MOSI")).into_function::<hal::gpio::FunctionSpi>();
+        pin_select!(pins, env!("PIN_SCREEN_MOSI")).into_function::<hal::gpio::FunctionPio0>();
     let screen_miso_pin =
         pin_select!(pins, env!("PIN_SCREEN_MISO")).into_function::<hal::gpio::FunctionSpi>();
 
-    /*let streamer = hardware::display::DmaStreamer::new(dma.ch0, dma.ch1, display_buffer);
+    let streamer = hardware::display::DmaStreamer::new(dma.ch0, dma.ch1, display_buffer);
     let display_interface = hardware::display::SpiPioDmaInterface::new(
         (3, 0),
         screen_data_cs,
@@ -319,9 +317,9 @@ fn main() -> ! {
         spi_mosi.id().num,
         streamer,
         timer,
-    );*/
+    );
 
-    let spi_bus = rp235x_hal::Spi::<_, _, _, 8>::new(
+    /*let spi_bus = rp235x_hal::Spi::<_, _, _, 8>::new(
         pac.SPI0,
         (spi_mosi, screen_miso_pin, spi_sclk)
     );
@@ -336,7 +334,7 @@ fn main() -> ! {
 
     let excl_spi_dev = ExclusiveDevice::new(spi_bus, screen_data_cs, timer).unwrap();
     let mut buffer = [0_u8; 512];
-    let display_interface = SpiInterface::new(excl_spi_dev, screen_data_command_pin, &mut buffer);
+    let display_interface = SpiInterface::new(excl_spi_dev, screen_data_command_pin, &mut buffer);*/
 
     let display_builder = mipidsi::Builder::new(DisplayDriver, display_interface)
         .display_size(DISPLAY_WIDTH as u16, DISPLAY_HEIGHT as u16)
