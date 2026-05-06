@@ -7,13 +7,16 @@ use mipidsi::interface::{Interface, InterfaceKind};
 use rp235x_hal::timer::TimerDevice;
 use super::DmaStreamer;
 
-pub struct SpiPioDmaInterface<CS, DC, P, SM1, SM2, CH1, CH2, TD>
-where
+pub struct SpiPioDmaInterface<
+    CS,
+    DC,
     P: PIOExt,
     SM1: StateMachineIndex,
     SM2: StateMachineIndex,
-    TD: TimerDevice,
-{
+    CH1,
+    CH2,
+    TD: TimerDevice
+> {
     streamer: DmaStreamer<CH1, CH2>,
     mode: Option<PioMode<P, SM1, SM2>>,
     cs: CS,
@@ -22,8 +25,18 @@ where
 }
 
 enum PioMode<P: PIOExt, SM1: StateMachineIndex, SM2: StateMachineIndex> {
-    Byte((PioCont<P, SM1, Byte, Running>, PioCont<P, SM2, HalfWord, Stopped>)),
-    HalfWord((PioCont<P, SM1, Byte, Stopped>, PioCont<P, SM2, HalfWord, Running>)),
+    Byte(
+        (
+            PioCont<P, SM1, Byte, Running>,
+            PioCont<P, SM2, HalfWord, Stopped>
+        )
+    ),
+    HalfWord(
+        (
+            PioCont<P, SM1, Byte, Stopped>,
+            PioCont<P, SM2, HalfWord, Running>
+        )
+    ),
 }
 
 struct PioCont<P: PIOExt, SM: StateMachineIndex, TxSz, State> {
@@ -121,14 +134,22 @@ where
 
     #[inline(always)]
     fn wait_idle(&mut self) {
-        loop {
-            let mode = self.mode.as_ref().unwrap();
-            let idle = match mode {
-                PioMode::Byte(p) => p.0.tx.has_stalled(),
-                PioMode::HalfWord(p) => p.1.tx.has_stalled(),
-            };
-            if idle { break; }
-            crate::hal::arch::nop();
+        let mode = self.mode.as_mut().unwrap();
+        
+        match mode {
+            PioMode::Byte(p) => {
+                // 1. Wait for DMA/CPU to finish feeding the TX FIFO
+                while !p.0.tx.is_empty() { crate::hal::arch::nop(); }
+                // 2. Clear the sticky stall flag BEFORE waiting on it
+                p.0.tx.clear_stalled_flag();
+                // 3. Wait for the final bits to leave the shift register and stall
+                while !p.0.tx.has_stalled() { crate::hal::arch::nop(); }
+            },
+            PioMode::HalfWord(p) => {
+                while !p.1.tx.is_empty() { crate::hal::arch::nop(); }
+                p.1.tx.clear_stalled_flag();
+                while !p.1.tx.has_stalled() { crate::hal::arch::nop(); }
+            },
         }
     }
 
@@ -165,8 +186,8 @@ where
     const KIND: InterfaceKind = InterfaceKind::Serial4Line;
 
     fn send_command(&mut self, command: u8, args: &[u8]) -> Result<(), Self::Error> {
-        self.cs.set_low().ok();
         self.wait_idle();
+        self.cs.set_low().ok();
 
         self.dc.set_low().ok();
         self.timer.delay_ns(9000);
@@ -188,8 +209,8 @@ where
         &mut self,
         pixels: impl IntoIterator<Item = [Self::Word; N]>,
     ) -> Result<(), Self::Error> {
-        self.cs.set_low().ok();
         self.wait_idle();
+        self.cs.set_low().ok();
         self.dc.set_high().ok();
         self.timer.delay_ns(9000);
 
@@ -211,8 +232,8 @@ where
         pixel: [Self::Word; N],
         count: u32,
     ) -> Result<(), Self::Error> {
-        self.cs.set_low().ok();
         self.wait_idle();
+        self.cs.set_low().ok();
         self.dc.set_high().ok();
         self.timer.delay_ns(9000);
 
