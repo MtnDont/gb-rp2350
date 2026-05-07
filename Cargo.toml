@@ -37,7 +37,7 @@ cortex-m-rt = "0.7.5"
 critical-section = { version = "1.2.0" }
 defmt = "0.3.10"
 
-embedded-sdmmc = { version = "0.8.1", features = [
+embedded-sdmmc = { version = "0.9.0", features = [
     # "defmt-log",
 ], default-features = false }
 embedded-alloc = "0.6.0"

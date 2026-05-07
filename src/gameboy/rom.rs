@@ -103,7 +103,7 @@ impl<
 }
 impl<
         D: embedded_sdmmc::BlockDevice,
-        T: embedded_sdmmc::TimeSource,
+        T: embedded_sdmmc::TimeSource + Default,
         DT: TimerDevice,
         DR: Fn(&mut D),
         const ROM_CACHE_SIZE: usize,
@@ -153,7 +153,10 @@ impl<
     fn save(&mut self, game_title: &str, bank_index: u8, bank: &[u8]) {
         self.timer.borrow_mut().delay_ms(10);
         let mut volume_manager = self.volume_manager.borrow_mut();
-        (self.device_reset)(volume_manager.device());
+        volume_manager.device(|d| {
+            (self.device_reset)(d);
+            T::default()
+        });
 
         let mut volume = self
             .raw_volume
@@ -199,7 +202,10 @@ impl<
         info!("Loading ram bank: {}", bank_index);
         self.timer.borrow_mut().delay_ms(10);
         let mut volume_manager = self.volume_manager.borrow_mut();
-        (self.device_reset)(volume_manager.device());
+        volume_manager.device(|d| {
+            (self.device_reset)(d);
+            T::default()
+        });
 
         let mut volume = self
             .raw_volume

@@ -22,7 +22,7 @@ pub struct StaticRomManager<
 }
 impl<
         D: embedded_sdmmc::BlockDevice,
-        T: embedded_sdmmc::TimeSource,
+        T: embedded_sdmmc::TimeSource + Default,
         DT: TimerDevice,
         DR: Fn(&mut D),
         const MAX_DIRS: usize,
@@ -56,7 +56,10 @@ impl<
         self.timer.delay_ms(10);
 
         let mut volume_manager = self.volume_manager.borrow_mut();
-        (self.device_reset)(volume_manager.device());
+        volume_manager.device(|d| {
+            (self.device_reset)(d);
+            T::default()
+        });
 
         let mut volume = volume_manager.open_volume(embedded_sdmmc::VolumeIdx(0))?;
         let mut root_directory = volume.open_root_dir()?;
@@ -87,7 +90,7 @@ impl<
 }
 impl<
         D: embedded_sdmmc::BlockDevice,
-        T: embedded_sdmmc::TimeSource,
+        T: embedded_sdmmc::TimeSource + Default,
         DT: TimerDevice,
         DR: Fn(&mut D),
         const MAX_DIRS: usize,
@@ -132,7 +135,10 @@ impl<
         info!("Loading ram bank: {}", bank_index);
         self.timer.delay_ms(10);
         let mut volume_manager = self.volume_manager.borrow_mut();
-        (self.device_reset)(volume_manager.device());
+        volume_manager.device(|d| {
+            (self.device_reset)(d);
+            T::default()
+        });
 
         let mut volume = volume_manager
             .open_volume(embedded_sdmmc::VolumeIdx(0))

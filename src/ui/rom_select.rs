@@ -18,7 +18,7 @@ use super::ListDisplay;
 #[inline(always)]
 pub fn select_rom<'a, D: DrawTarget<Color = Rgb565>, TD: TimerDevice>(
     display: &mut D,
-    rom_list: &[String],
+    rom_list: &[(String, String)],
     mut _timer: crate::hal::Timer<TD>,
     up_button: &'a mut dyn InputPin<Error = Infallible>,
     down_button: &'a mut dyn InputPin<Error = Infallible>,
@@ -49,17 +49,20 @@ pub fn select_rom<'a, D: DrawTarget<Color = Rgb565>, TD: TimerDevice>(
         5,
     );
     let max_items_to_display = ((RENDER_HEIGHT / (20 + 5)) as usize) - 1;
-    let mut items = LimitedViewList::new(rom_list, max_items_to_display);
-    list.draw(items.iter(), 0, display)?;
+    let mut items = LimitedViewList::new(
+        rom_list,
+        max_items_to_display
+    );
+    list.draw(items.iter().map(|d| d.0.as_str()), 0, display)?;
     loop {
         if up_button.is_low().unwrap() && !button_clicked {
             if selected_rom != 0 {
                 selected_rom = selected_rom - 1;
                 defmt::info!("up_button Start redraw: {}", selected_rom);
-                list.draw(items.iter(), selected_rom, display)?;
+                list.draw(items.iter().map(|d| d.0.as_str()), selected_rom, display)?;
             } else {
                 items.prev();
-                list.draw(items.iter(), selected_rom, display)?;
+                list.draw(items.iter().map(|d| d.0.as_str()), selected_rom, display)?;
             }
             button_clicked = true;
         }
@@ -67,10 +70,10 @@ pub fn select_rom<'a, D: DrawTarget<Color = Rgb565>, TD: TimerDevice>(
             if selected_rom + 1 < items.max() as u8 {
                 selected_rom = selected_rom + 1;
                 defmt::info!("down_button Start redraw: {}", selected_rom);
-                list.draw(items.iter(), selected_rom, display)?;
+                list.draw(items.iter().map(|d| d.0.as_str()), selected_rom, display)?;
             } else if (items.len() - items.current_cursor()) > items.max() {
                 items.next();
-                list.draw(items.iter(), selected_rom, display)?;
+                list.draw(items.iter().map(|d| d.0.as_str()), selected_rom, display)?;
             }
             button_clicked = true;
         }

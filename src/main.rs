@@ -35,6 +35,7 @@ use ui::loading::LoadingScreen;
 extern crate alloc;
 
 use embedded_sdmmc::{SdCard, VolumeManager};
+use embedded_sdmmc::filesystem::LfnBuffer;
 use gameboy::display::GameboyLineBufferDisplay;
 use gameboy::{GameEmulationHandler, GameboyButtonHandler, InputButtonMapper};
 use gb_core::gameboy::GameBoy;
@@ -232,21 +233,29 @@ fn main() -> ! {
             use_crc: true,
         },
     );
-
     let mut volume_mgr = VolumeManager::new(sdcard, hardware::sdcard::DummyTimesource::default());
     let mut volume0 = volume_mgr
         .open_volume(embedded_sdmmc::VolumeIdx(0))
         .unwrap();
 
-    let rom_list = Rc::new(RefCell::new(alloc::vec::Vec::<String>::new()));
+    let rom_list = Rc::new(RefCell::new(alloc::vec::Vec::<(String, String)>::new()));
     let mut root_dir = volume0.open_root_dir().unwrap();
+    let mut storage = [0u8; 40];
+    let mut name_buffer: LfnBuffer = LfnBuffer::new(&mut storage);
     root_dir
-        .iterate_dir(|dir_entry| {
+        .iterate_dir_lfn(&mut name_buffer, |dir_entry, opt_name| {
             let extension = String::from_utf8(dir_entry.name.extension().to_vec()).unwrap();
             if extension.eq("GB") {
-                let rom_name =
-                    String::from_utf8(dir_entry.name.base_name().to_vec()).unwrap() + ".GB";
-                rom_list.borrow_mut().push(rom_name);
+                let lfn = opt_name.map(|name|
+                    String::from_utf8(name.as_bytes().to_vec()).unwrap()
+                );
+                if let Some(lfn_rom_name) = lfn {
+                    let rom_name =
+                        String::from_utf8(dir_entry.name.base_name().to_vec()).unwrap() + ".GB";
+                    rom_list.borrow_mut().push(
+                        (lfn_rom_name, rom_name)
+                    );
+                }
             }
         })
         .unwrap();
@@ -289,18 +298,15 @@ fn main() -> ! {
     cortex_m::singleton!(: [u16;(GAMEBOY_RENDER_WIDTH as usize) * 3]  = [0u16; (GAMEBOY_RENDER_WIDTH as usize ) * 3 ])
         .unwrap()
         .as_mut_slice();
-    let screen_data_cs = pin_select!(pins, env!("PIN_SCREEN_CS")).into_push_pull_output();
-    //screen_data_cs.set_low().unwrap();
+    let mut screen_data_cs = pin_select!(pins, env!("PIN_SCREEN_CS")).into_push_pull_output();
+    screen_data_cs.set_low().unwrap();
 
     let screen_data_command_pin = pin_select!(pins, env!("PIN_SCREEN_DC")).into_push_pull_output();
-    let mut display_reset = pin_select!(pins, env!("PIN_SCREEN_RESET")).into_push_pull_output();
-    display_reset.set_high().unwrap();
+    let display_reset = pin_select!(pins, env!("PIN_SCREEN_RESET")).into_push_pull_output();
 
     let spi_sclk =
-        //pin_select!(pins, env!("PIN_SCREEN_SCLK")).into_function::<hal::gpio::FunctionSpi>();
         pin_select!(pins, env!("PIN_SCREEN_SCLK")).into_function::<hal::gpio::FunctionPio0>();
     let spi_mosi =
-        //pin_select!(pins, env!("PIN_SCREEN_MOSI")).into_function::<hal::gpio::FunctionSpi>();
         pin_select!(pins, env!("PIN_SCREEN_MOSI")).into_function::<hal::gpio::FunctionPio0>();
     let screen_miso_pin =
         pin_select!(pins, env!("PIN_SCREEN_MISO")).into_function::<hal::gpio::FunctionSpi>();
@@ -318,23 +324,6 @@ fn main() -> ! {
         streamer,
         timer,
     );
-
-    /*let spi_bus = rp235x_hal::Spi::<_, _, _, 8>::new(
-        pac.SPI0,
-        (spi_mosi, screen_miso_pin, spi_sclk)
-    );
-
-    // Exchange the uninitialised SPI driver for an initialised one
-    let spi_bus = spi_bus.init(
-        &mut pac.RESETS,
-        clocks.peripheral_clock.freq(),
-        12_000_000u32.Hz(),
-        embedded_hal::spi::MODE_3,
-    );
-
-    let excl_spi_dev = ExclusiveDevice::new(spi_bus, screen_data_cs, timer).unwrap();
-    let mut buffer = [0_u8; 512];
-    let display_interface = SpiInterface::new(excl_spi_dev, screen_data_command_pin, &mut buffer);*/
 
     let display_builder = mipidsi::Builder::new(DisplayDriver, display_interface)
         .display_size(DISPLAY_WIDTH as u16, DISPLAY_HEIGHT as u16)
@@ -399,7 +388,7 @@ fn main() -> ! {
     )
     .unwrap();
 
-    let name = rom_list[selected_rom].clone();
+    let name = rom_list[selected_rom].1.clone();
     defmt::info!("Menu END: {}", defmt::Display2Format(&name));
 
     #[cfg(feature = "psram_rom")]
@@ -446,7 +435,7 @@ fn main() -> ! {
     );
     led_pin.set_high().unwrap();
 
-    //display.clear(Rgb565::BLACK).unwrap();
+    display.clear(Rgb565::BLACK).unwrap();
     run_game_boy(gameboy, display, button_handler, timer);
     loop {
         crate::hal::arch::nop();
@@ -527,7 +516,7 @@ fn load_rom<
     'a,
     DISPLAY: DrawTarget<Color = Rgb565>,
     D: embedded_sdmmc::BlockDevice + 'a,
-    T: embedded_sdmmc::TimeSource + 'a,
+    T: embedded_sdmmc::TimeSource + Default + 'a,
     DT: TimerDevice + 'a,
     DR: Fn(&mut D) + 'a,
     const MAX_DIRS: usize,
@@ -541,7 +530,10 @@ fn load_rom<
     device_reset: DR,
 ) -> Box<dyn Cartridge + 'a> {
     use hardware::flash::FLASH_SECTOR_SIZE;
-    device_reset(volume_manager.device());
+    volume_manager.device(|d| {
+        device_reset(d);
+        T::default()
+    });
     let mut volume = volume_manager
         .open_volume(embedded_sdmmc::VolumeIdx(0))
         .unwrap();
@@ -621,7 +613,7 @@ fn load_rom<
     device_reset: DR,
 ) -> Box<dyn Cartridge + 'a> {
     defmt::info!("Loading from SDCARD");
-    #[const_env::from_env]
+    #[const_env::env_item]
     const ROM_CACHE_SIZE: usize = 10;
     let rom_manager: gameboy::rom::SdRomManager<
         D,
@@ -678,7 +670,7 @@ fn load_rom_to_psram<
     'a,
     DISPLAY: DrawTarget<Color = Rgb565>,
     D: embedded_sdmmc::BlockDevice + 'a,
-    T: embedded_sdmmc::TimeSource + 'a,
+    T: embedded_sdmmc::TimeSource + Default + 'a,
     DT: TimerDevice + 'a,
     DR: Fn(&mut D) + 'a,
     const MAX_DIRS: usize,
@@ -693,7 +685,10 @@ fn load_rom_to_psram<
     device_reset: DR,
 ) -> Box<dyn Cartridge + 'a> {
     pub const ROM_READ_BUFFER_SIZE: u32 = 4096 * 4;
-    device_reset(volume_manager.device());
+    volume_manager.device(|d| {
+        device_reset(d);
+        T::default()
+    });
     let mut volume = volume_manager
         .open_volume(embedded_sdmmc::VolumeIdx(0))
         .unwrap();

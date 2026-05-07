@@ -25,23 +25,23 @@ pub struct SpiPioDmaInterface<
 }
 
 enum PioMode<P: PIOExt, SM1: StateMachineIndex, SM2: StateMachineIndex> {
-    Byte(
+    ByteMode(
         (
-            PioCont<P, SM1, Byte, Running>,
-            PioCont<P, SM2, HalfWord, Stopped>
+            PioContainer<P, SM1, Byte, Running>,
+            PioContainer<P, SM2, HalfWord, Stopped>
         )
     ),
-    HalfWord(
+    HalfWordMode(
         (
-            PioCont<P, SM1, Byte, Stopped>,
-            PioCont<P, SM2, HalfWord, Running>
+            PioContainer<P, SM1, Byte, Stopped>,
+            PioContainer<P, SM2, HalfWord, Running>
         )
     ),
 }
 
-struct PioCont<P: PIOExt, SM: StateMachineIndex, TxSz, State> {
+struct PioContainer<P: PIOExt, SM: StateMachineIndex, TxSize, State> {
     sm: StateMachine<(P, SM), State>,
-    tx: Tx<(P, SM), TxSz>,
+    tx: Tx<(P, SM), TxSize>,
     rx: Rx<(P, SM)>,
 }
 
@@ -70,64 +70,79 @@ where
     ) -> Self {
         cs.set_high().ok();
 
-        let prog = pio_proc::pio_asm!(".side_set 1", "out pins, 1 side 0", "nop side 1");
+        let video_program =
+            pio_proc::pio_asm!(".side_set 1", "out pins, 1 side 0", "nop side 1");
 
-        let installed = pio.install(&prog.program).unwrap();
-        let (mut sm8, rx8, tx8) = hal::pio::PIOBuilder::from_installed_program(installed)
-            .out_pins(tx, 1)
-            .side_set_pin_base(clk)
-            .autopull(true)
-            .pull_threshold(8)
-            .out_shift_direction(hal::pio::ShiftDirection::Left)
-            .in_shift_direction(hal::pio::ShiftDirection::Left)
-            .buffers(hal::pio::Buffers::OnlyTx)
-            .clock_divisor_fixed_point(clock_divider.0, clock_divider.1)
-            .build(sm1);
-        sm8.set_pindirs([(tx, hal::pio::PinDir::Output)]);
-        sm8.set_pindirs([(clk, hal::pio::PinDir::Output)]);
+        let video_program_installed = pio.install(&video_program.program).unwrap();
+        let (mut sm_8b, rx_8b, tx_8b) =
+            hal::pio::PIOBuilder::from_installed_program(video_program_installed)
+                .out_pins(tx, 1)
+                .side_set_pin_base(clk)
+                .autopull(true)
+                .pull_threshold(8)
+                .out_shift_direction(hal::pio::ShiftDirection::Left)
+                .in_shift_direction(hal::pio::ShiftDirection::Left)
+                .buffers(hal::pio::Buffers::OnlyTx)
+                .clock_divisor_fixed_point(clock_divider.0, clock_divider.1)
+                .build(sm1);
 
-        let installed = pio.install(&prog.program).unwrap();
-        let (mut sm16, rx16, tx16) = hal::pio::PIOBuilder::from_installed_program(installed)
-            .out_pins(tx, 1)
-            .side_set_pin_base(clk)
-            .autopull(true)
-            .pull_threshold(16)
-            .out_shift_direction(hal::pio::ShiftDirection::Left)
-            .in_shift_direction(hal::pio::ShiftDirection::Left)
-            .buffers(hal::pio::Buffers::OnlyTx)
-            .clock_divisor_fixed_point(clock_divider.0, clock_divider.1)
-            .build(sm2);
-        sm16.set_pindirs([(tx, hal::pio::PinDir::Output)]);
-        sm16.set_pindirs([(clk, hal::pio::PinDir::Output)]);
+        sm_8b.set_pindirs([(tx, hal::pio::PinDir::Output)]);
+        sm_8b.set_pindirs([(clk, hal::pio::PinDir::Output)]);
+
+        let video_program_installed = pio.install(&video_program.program).unwrap();
+        let (mut sm_16b, rx_16b, tx_16b) =
+            hal::pio::PIOBuilder::from_installed_program(video_program_installed)
+                .out_pins(tx, 1)
+                .side_set_pin_base(clk)
+                .autopull(true)
+                .pull_threshold(16)
+                .out_shift_direction(hal::pio::ShiftDirection::Left)
+                .in_shift_direction(hal::pio::ShiftDirection::Left)
+                .buffers(hal::pio::Buffers::OnlyTx)
+                .clock_divisor_fixed_point(clock_divider.0, clock_divider.1)
+                .build(sm2);
+
+        sm_16b.set_pindirs([(tx, hal::pio::PinDir::Output)]);
+        sm_16b.set_pindirs([(clk, hal::pio::PinDir::Output)]);
 
         Self {
             streamer,
             cs,
             dc,
-            mode: Some(PioMode::Byte((
-                PioCont { sm: sm8.start(), tx: tx8.transfer_size(Byte), rx: rx8 },
-                PioCont { sm: sm16, tx: tx16.transfer_size(HalfWord), rx: rx16 },
+            mode: Some(PioMode::ByteMode((
+                PioContainer { sm: sm_8b.start(), tx: tx_8b.transfer_size(Byte), rx: rx_8b },
+                PioContainer { sm: sm_16b, tx: tx_16b.transfer_size(HalfWord), rx: rx_16b },
             ))),
             timer,
         }
     }
 
-    fn to_byte_mode(mode: PioMode<P, SM1, SM2>) -> (PioCont<P, SM1, Byte, Running>, PioCont<P, SM2, HalfWord, Stopped>) {
+    fn set_8bit_mode(
+        mode: PioMode<P, SM1, SM2>
+    ) -> (
+        PioContainer<P, SM1, Byte, Running>,
+        PioContainer<P, SM2, HalfWord, Stopped>
+    ) {
         match mode {
-            PioMode::Byte(p) => p,
-            PioMode::HalfWord((b, h)) => (
-                PioCont { sm: b.sm.start(), tx: b.tx, rx: b.rx },
-                PioCont { sm: h.sm.stop(),  tx: h.tx, rx: h.rx },
+            PioMode::ByteMode(p) => p,
+            PioMode::HalfWordMode((b, h)) => (
+                PioContainer { sm: b.sm.start(), tx: b.tx, rx: b.rx },
+                PioContainer { sm: h.sm.stop(),  tx: h.tx, rx: h.rx },
             ),
         }
     }
 
-    fn to_halfword_mode(mode: PioMode<P, SM1, SM2>) -> (PioCont<P, SM1, Byte, Stopped>, PioCont<P, SM2, HalfWord, Running>) {
+    fn set_16bit_mode(
+        mode: PioMode<P, SM1, SM2>
+    ) -> (
+        PioContainer<P, SM1, Byte, Stopped>,
+        PioContainer<P, SM2, HalfWord, Running>
+    ) {
         match mode {
-            PioMode::HalfWord(p) => p,
-            PioMode::Byte((b, h)) => (
-                PioCont { sm: b.sm.stop(),  tx: b.tx, rx: b.rx },
-                PioCont { sm: h.sm.start(), tx: h.tx, rx: h.rx },
+            PioMode::HalfWordMode(p) => p,
+            PioMode::ByteMode((b, h)) => (
+                PioContainer { sm: b.sm.stop(),  tx: b.tx, rx: b.rx },
+                PioContainer { sm: h.sm.start(), tx: h.tx, rx: h.rx },
             ),
         }
     }
@@ -137,7 +152,7 @@ where
         let mode = self.mode.as_mut().unwrap();
         
         match mode {
-            PioMode::Byte(p) => {
+            PioMode::ByteMode(p) => {
                 // 1. Wait for DMA/CPU to finish feeding the TX FIFO
                 while !p.0.tx.is_empty() { crate::hal::arch::nop(); }
                 // 2. Clear the sticky stall flag BEFORE waiting on it
@@ -145,7 +160,7 @@ where
                 // 3. Wait for the final bits to leave the shift register and stall
                 while !p.0.tx.has_stalled() { crate::hal::arch::nop(); }
             },
-            PioMode::HalfWord(p) => {
+            PioMode::HalfWordMode(p) => {
                 while !p.1.tx.is_empty() { crate::hal::arch::nop(); }
                 p.1.tx.clear_stalled_flag();
                 while !p.1.tx.has_stalled() { crate::hal::arch::nop(); }
@@ -155,16 +170,16 @@ where
 
     #[inline(always)]
     fn send_bytes(&mut self, iter: &mut dyn Iterator<Item = u8>) {
-        let (mut b, h) = Self::to_byte_mode(self.mode.take().unwrap());
+        let (mut b, h) = Self::set_8bit_mode(self.mode.take().unwrap());
         b.tx = self.streamer.stream_8b(b.tx, iter);
-        self.mode = Some(PioMode::Byte((b, h)));
+        self.mode = Some(PioMode::ByteMode((b, h)));
     }
 
     #[inline(always)]
     fn send_pixels_u16(&mut self, iter: &mut dyn Iterator<Item = u16>) {
-        let (b, mut h) = Self::to_halfword_mode(self.mode.take().unwrap());
+        let (b, mut h) = Self::set_16bit_mode(self.mode.take().unwrap());
         h.tx = self.streamer.stream_16b(h.tx, iter, u16::to_be);
-        self.mode = Some(PioMode::HalfWord((b, h)));
+        self.mode = Some(PioMode::HalfWordMode((b, h)));
     }
 }
 
@@ -188,9 +203,9 @@ where
     fn send_command(&mut self, command: u8, args: &[u8]) -> Result<(), Self::Error> {
         self.wait_idle();
         self.cs.set_low().ok();
-
         self.dc.set_low().ok();
         self.timer.delay_ns(9000);
+        
         self.send_bytes(&mut core::iter::once(command));
 
         if !args.is_empty() {

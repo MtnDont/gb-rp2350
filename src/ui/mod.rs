@@ -27,17 +27,20 @@ impl ListDisplay {
         }
     }
 
-    pub fn draw<D>(
+    pub fn draw<D, I, S>(
         &self,
-        items: core::slice::Iter<'_, String>,
+        items: I,
         selected: u8,
         display: &mut D,
     ) -> Result<(), D::Error>
     where
         D: DrawTarget<Color = Rgb565>,
+        I: Iterator<Item = S>,
+        S: AsRef<str>
     {
         // Draw each item
         for (index, item) in items.enumerate() {
+            let item = item.as_ref();
             let y_offset = index as i32 * (self.item_height + self.item_padding);
             let item_position = self.position + Point::new(0, y_offset);
 
